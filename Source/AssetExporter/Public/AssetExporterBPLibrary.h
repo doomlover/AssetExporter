@@ -39,4 +39,7 @@ class ASSETEXPORTER_API UAssetExporterBPLibrary : public UBlueprintFunctionLibra
 
 	UFUNCTION(BlueprintCallable)
 	static void ExportCamera(ACameraActor* Camera, const FString& Path);
+
+	UFUNCTION(BlueprintCallable)
+	static void ExportStaticMeshBinary(UStaticMesh* Mesh, const FString& Path);
 };

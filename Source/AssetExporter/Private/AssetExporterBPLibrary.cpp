@@ -10,6 +10,7 @@
 #include "StaticMeshResources.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Rendering/StaticMeshVertexBuffer.h"
 #if 0
 #include "StaticMeshAttributes.h"
 #include "MeshElementArray.h"
@@ -149,5 +150,72 @@ void UAssetExporterBPLibrary::ExportCamera(ACameraActor* Camera, const FString& 
 		lPath = FPackageName::LongPackageNameToFilename(lPath);
 	}
 	FFileHelper::SaveStringToFile(JsonStr, *lPath);
+}
+
+struct FJunMesh
+{
+	int32 NumVerts;
+	int32 NumIndices;
+	TArray<FVector> Positions;
+	TArray<FVector> Normals;
+	TArray<uint32> Indices;
+};
+
+/*
+Export mesh to a custom formated binary file. See FJunMesh.
+Just lod0 will be exported and one material is supported.
+*/
+void UAssetExporterBPLibrary::ExportStaticMeshBinary(UStaticMesh* Mesh, const FString& Path)
+{
+	// check and get the lod0 resource
+	check(Mesh && Mesh->RenderData && Mesh->RenderData->LODResources.Num() > 0);
+	FStaticMeshLODResources& LODResource = Mesh->RenderData->LODResources[0];
+	
+	TSharedPtr<FJunMesh> JunMesh = MakeShareable(new FJunMesh);
+
+	const int32 NumVerts = LODResource.GetNumVertices();
+	JunMesh->NumVerts = NumVerts;
+
+	// positions
+	JunMesh->Positions.SetNum(NumVerts);
+	check(LODResource.VertexBuffers.PositionVertexBuffer.GetNumVertices() == NumVerts);
+	check(LODResource.VertexBuffers.PositionVertexBuffer.GetStride());
+	FMemory::Memcpy(JunMesh->Positions.GetData(), LODResource.VertexBuffers.PositionVertexBuffer.GetVertexData(), NumVerts * sizeof(FVector));
+
+	// normals
+	JunMesh->Normals.SetNum(NumVerts);
+	FStaticMeshVertexBuffer& StaticMeshVertexBuffer = LODResource.VertexBuffers.StaticMeshVertexBuffer;
+	for (int32 i = 0; i < NumVerts; ++i)
+	{
+		JunMesh->Normals[i] = (FVector)StaticMeshVertexBuffer.VertexTangentZ(i);
+	}
+
+	// indices
+	const int32 NumTris = LODResource.GetNumTriangles();
+	JunMesh->NumIndices = NumTris * 3;
+	FRawStaticIndexBuffer& IndexBuffer = LODResource.IndexBuffer;
+	IndexBuffer.GetCopy(JunMesh->Indices);
+	check(JunMesh->Indices.Num() == JunMesh->NumIndices);
+
+	// export to file
+	FString lPath = Path;
+	if (lPath.IsEmpty())
+	{
+		lPath = FPackageName::LongPackageNameToFilename(Mesh->GetPackage()->GetPathName());
+	}
+	TArray<uint8> JunMeshBytes;
+	JunMeshBytes.SetNum(sizeof(int32) * 2
+		+(JunMesh->Positions.Num() + JunMesh->Normals.Num()) * sizeof(FVector)
+		+JunMesh->Indices.Num() * sizeof(uint32));
+	FMemory::Memcpy(JunMeshBytes.GetData(), &JunMesh->NumVerts, sizeof(int32));
+	FMemory::Memcpy(JunMeshBytes.GetData() + sizeof(int32), &JunMesh->NumIndices, sizeof(int32));
+	FMemory::Memcpy(JunMeshBytes.GetData() + sizeof(int32) * 2, JunMesh->Positions.GetData(), JunMesh->Positions.Num() * sizeof(FVector));
+	FMemory::Memcpy(JunMeshBytes.GetData() + sizeof(int32) * 2 + JunMesh->Positions.Num() * sizeof(FVector),
+		JunMesh->Normals.GetData(), JunMesh->Normals.Num() * sizeof(FVector));
+	FMemory::Memcpy(JunMeshBytes.GetData() + sizeof(int32) * 2 + (JunMesh->Positions.Num()+ JunMesh->Normals.Num()) * sizeof(FVector),
+		JunMesh->Indices.GetData(), JunMesh->Indices.Num() * sizeof(uint32));
+	
+	bool bOk = FFileHelper::SaveArrayToFile(JunMeshBytes, *lPath);
+	UE_LOG(LogTemp, Log, TEXT("[XSJ] Save %s to %s"), *Mesh->GetPathName(), *lPath);
 }
 
