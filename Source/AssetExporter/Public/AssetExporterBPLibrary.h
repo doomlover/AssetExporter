@@ -25,6 +25,12 @@
 
 class UStaticMesh;
 class ACameraActor;
+class ADirectionalLight;
+
+namespace ns_yoyo
+{
+	struct FLevelSceneInfo;
+}
 
 UCLASS()
 class ASSETEXPORTER_API UAssetExporterBPLibrary : public UBlueprintFunctionLibrary
@@ -35,11 +41,195 @@ class ASSETEXPORTER_API UAssetExporterBPLibrary : public UBlueprintFunctionLibra
 	static float AssetExporterSampleFunction(float Param);
 
 	UFUNCTION(BlueprintCallable)
+	static void ExportStaticMeshJson(UStaticMesh* Mesh, const FString& Path);
+
+	UFUNCTION(BlueprintCallable)
 	static void ExportStaticMesh(UStaticMesh* Mesh, const FString& Path);
 
 	UFUNCTION(BlueprintCallable)
-	static void ExportCamera(ACameraActor* Camera, const FString& Path);
+	static void ExportAsset(UObject* Asset, const FString& Path);
 
-	UFUNCTION(BlueprintCallable)
-	static void ExportStaticMeshBinary(UStaticMesh* Mesh, const FString& Path);
+	static void ExportMap(UWorld* World, const FString& Path);
+
+	static void ExportCamera(ACameraActor* Camera,
+		ns_yoyo::FLevelSceneInfo& LevelSceneInfo);
+
+	static void ExportDirectionalLight(ADirectionalLight* DirectionalLight,
+		ns_yoyo::FLevelSceneInfo& LevelSceneInfo);
 };
+
+namespace ns_yoyo
+{
+	enum class EResourceType : uint8
+	{
+		Level,
+		StaticMesh,
+		SkeletalMesh,
+		Max
+	};
+
+	class FVertexBuffer
+	{
+	public:
+		uint32 Stride;
+		uint32 NumVertices;
+		TArray<float> RawData;
+	
+		friend FArchive& operator<<(FArchive& Ar, FVertexBuffer& Buffer)
+		{
+			return Ar << Buffer.Stride
+				<< Buffer.NumVertices
+				<< Buffer.RawData;
+		}
+	};
+
+	class FIndexBuffer
+	{
+	public:
+		uint32 NumIndices;
+		TArray<uint32> BufferData;
+	
+		friend FArchive& operator<<(FArchive& Ar, FIndexBuffer& Buffer)
+		{
+			return Ar << Buffer.NumIndices
+				<< Buffer.BufferData;
+		}
+	};
+
+	struct FStaticMeshSection
+	{
+		int32 MaterialIndex;
+		uint32 FirstIndex;
+		uint32 NumTriangles;
+		uint32 MinVertexIndex;
+		uint32 MaxVertexIndex;
+		bool bCastShadow;
+
+		FStaticMeshSection()
+			: MaterialIndex(0)
+			, FirstIndex(0)
+			, NumTriangles(0)
+			, MinVertexIndex(0)
+			, MaxVertexIndex(0)
+			, bCastShadow(true)
+		{}
+
+		friend FArchive& operator<<(FArchive& Ar, FStaticMeshSection& Section)
+		{
+			return Ar << Section.MaterialIndex
+				<< Section.FirstIndex
+				<< Section.NumTriangles
+				<< Section.MinVertexIndex
+				<< Section.MaxVertexIndex
+				<< Section.bCastShadow;
+		}
+	};
+
+	struct FStaticMeshResource
+	{
+		ns_yoyo::EResourceType Type = EResourceType::StaticMesh;
+		// asset path as id
+		FString Path;
+		// sub mesh info
+		TArray<FStaticMeshSection> Sections;
+		// raw vertex data
+		FVertexBuffer VertexBuffer;
+		// index data
+		FIndexBuffer IndexBuffer;
+
+		// material
+
+		inline friend FArchive& operator<<(FArchive& Ar, FStaticMeshResource& Resource)
+		{
+			// Type must go first
+			return Ar << Resource.Type
+				<< Resource.Path
+				<< Resource.Sections
+				<< Resource.VertexBuffer
+				<< Resource.IndexBuffer;
+		}
+	};
+
+	struct FStaticMeshSceneInfo
+	{
+		// path relative to the Content folder
+		FString ResourcePath;
+		// world transformation
+		FVector Location;
+		FQuat Rotation;
+		FVector Scale;
+	};
+
+	inline FArchive& operator<<(FArchive& Ar,
+		FStaticMeshSceneInfo& StaticMeshSceneInfo)
+	{
+		return Ar << StaticMeshSceneInfo.ResourcePath
+		<< StaticMeshSceneInfo.Location
+		<< StaticMeshSceneInfo.Rotation
+		<< StaticMeshSceneInfo.Scale;
+	}
+
+	struct FDirectionalLightSceneInfo
+	{
+		FVector Direction;
+		FVector Color;
+		float Intensity;
+
+		friend FArchive& operator<<(FArchive& Ar,
+			FDirectionalLightSceneInfo& Light)
+		{
+			return Ar << Light.Direction
+				<< Light.Color
+				<< Light.Intensity;
+		}
+	};
+
+	struct FCameraSceneInfo
+	{
+		FVector Location;
+		FVector Up;
+		FVector Right;
+		FVector Forward;
+		float Fov;
+		float AspectRatio;
+
+		friend FArchive& operator<<(FArchive& Ar, FCameraSceneInfo& CameraSceneInfo)
+		{
+			return Ar << CameraSceneInfo.Location
+				<< CameraSceneInfo.Up
+				<< CameraSceneInfo.Right
+				<< CameraSceneInfo.Forward
+				<< CameraSceneInfo.Fov
+				<< CameraSceneInfo.AspectRatio;
+		}
+	};
+
+	struct FLevelSceneInfo
+	{
+		FCameraSceneInfo Camera;
+		FDirectionalLightSceneInfo DirectionalLight;
+		TArray<FStaticMeshSceneInfo> StaticMesheSceneInfos;
+
+		friend FArchive& operator<<(FArchive& Ar, FLevelSceneInfo& SceneInfo)
+		{
+			Ar << SceneInfo.Camera;
+			Ar << SceneInfo.DirectionalLight;
+			Ar << SceneInfo.StaticMesheSceneInfos;
+			return Ar;
+		}
+	};
+
+	struct FLevelResource
+	{
+		EResourceType Type = EResourceType::Level;
+		FString Path;
+		FLevelSceneInfo SceneInfo;
+		friend FArchive& operator<<(FArchive& Ar, FLevelResource& LevelResource)
+		{
+			// Type must go first
+			return Ar << LevelResource.Type
+				<< LevelResource.Path
+				<< LevelResource.SceneInfo;
+		}
+	};
+}

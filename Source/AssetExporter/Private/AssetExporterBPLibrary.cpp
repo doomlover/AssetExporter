@@ -5,17 +5,27 @@
 #include "JsonObjectConverter.h"
 #include "JunJsonAsset.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
+#include "Engine/DirectionalLight.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "StaticMeshResources.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Rendering/StaticMeshVertexBuffer.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/DirectionalLightComponent.h"
 #if 0
 #include "StaticMeshAttributes.h"
 #include "MeshElementArray.h"
 #endif
 
+FString GetAssetPath(UObject* Asset)
+{
+	auto package_path = Asset->GetPackage()->GetPathName();
+	package_path.ReplaceInline(TEXT("/Game"), TEXT(""));
+	return package_path;
+}
 
 UAssetExporterBPLibrary::UAssetExporterBPLibrary(const FObjectInitializer& ObjectInitializer)
 : Super(ObjectInitializer)
@@ -28,7 +38,7 @@ float UAssetExporterBPLibrary::AssetExporterSampleFunction(float Param)
 	return -1;
 }
 
-void UAssetExporterBPLibrary::ExportStaticMesh(UStaticMesh* Mesh, const FString& Path)
+void UAssetExporterBPLibrary::ExportStaticMeshJson(UStaticMesh* Mesh, const FString& Path)
 {
 	/* MeshDescription带有冗余信息，UE4通过MeshDescription重建有BUG，只能得到带冗余的重建结果.
 	*  所以还是通过LodResource重建.
@@ -100,9 +110,26 @@ void UAssetExporterBPLibrary::ExportStaticMesh(UStaticMesh* Mesh, const FString&
 	FFileHelper::SaveStringToFile(JsonStr, *lPath);
 }
 
-void UAssetExporterBPLibrary::ExportCamera(ACameraActor* Camera, const FString& Path)
+void UAssetExporterBPLibrary::ExportCamera(ACameraActor* Camera,
+	ns_yoyo::FLevelSceneInfo& LevelSceneInfo)
 {
-	check(Camera);
+	check(Camera && Camera->IsA(ACameraActor::StaticClass()));
+#if 1
+	UCameraComponent* CameraComponent = Camera->GetCameraComponent();
+	FVector Location = CameraComponent->GetComponentLocation();
+	FVector Up = CameraComponent->GetUpVector();
+	FVector Right = CameraComponent->GetRightVector();
+	FVector Forward = CameraComponent->GetForwardVector();
+	float Fov = CameraComponent->FieldOfView;
+	float AspectRatio = CameraComponent->AspectRatio;
+
+	LevelSceneInfo.Camera.AspectRatio = AspectRatio;
+	LevelSceneInfo.Camera.Fov = Fov;
+	LevelSceneInfo.Camera.Forward = Forward;
+	LevelSceneInfo.Camera.Location = Location;
+	LevelSceneInfo.Camera.Right = Right;
+	LevelSceneInfo.Camera.Up = Up;
+#else
 	TSharedPtr<FJsonCamera> JsonCamea = MakeShareable(new FJsonCamera);
 
 	UCameraComponent* CameraComponent = Camera->GetCameraComponent();
@@ -150,6 +177,19 @@ void UAssetExporterBPLibrary::ExportCamera(ACameraActor* Camera, const FString& 
 		lPath = FPackageName::LongPackageNameToFilename(lPath);
 	}
 	FFileHelper::SaveStringToFile(JsonStr, *lPath);
+#endif
+}
+
+void UAssetExporterBPLibrary::ExportDirectionalLight(ADirectionalLight* UELight,
+	ns_yoyo::FLevelSceneInfo& yyLevelSceneInfo)
+{
+	check(UELight && UELight->IsA(ADirectionalLight::StaticClass()));
+	UDirectionalLightComponent* LightComponent = UELight->GetComponent();
+	auto& yyLight = yyLevelSceneInfo.DirectionalLight;
+	FLinearColor Color = LightComponent->GetLightColor();
+	yyLight.Color = {Color.R, Color.G, Color.B};
+	yyLight.Direction = LightComponent->GetComponentRotation().Vector();
+	yyLight.Intensity = LightComponent->Intensity;
 }
 
 struct FJunMesh
@@ -165,17 +205,64 @@ struct FJunMesh
 Export mesh to a custom formated binary file. See FJunMesh.
 Just lod0 will be exported and one material is supported.
 */
-void UAssetExporterBPLibrary::ExportStaticMeshBinary(UStaticMesh* Mesh, const FString& Path)
+void UAssetExporterBPLibrary::ExportStaticMesh(UStaticMesh* Mesh, const FString& Path)
 {
 	// check and get the lod0 resource
 	check(Mesh && Mesh->RenderData && Mesh->RenderData->LODResources.Num() > 0);
 	FStaticMeshLODResources& LODResource = Mesh->RenderData->LODResources[0];
-	
-	TSharedPtr<FJunMesh> JunMesh = MakeShareable(new FJunMesh);
-
 	const int32 NumVerts = LODResource.GetNumVertices();
-	JunMesh->NumVerts = NumVerts;
+	const int32 NumTris = LODResource.GetNumTriangles();
 
+	ns_yoyo::FStaticMeshResource yyMeshResource;
+	// build resource path
+	/*auto mesh_path = Mesh->GetPathName();
+	auto package_path = Mesh->GetPackage()->GetPathName();
+	auto package_file = FPackageName::LongPackageNameToFilename(Mesh->GetPackage()->GetPathName());
+	package_path.ReplaceInline(TEXT("/Game"), TEXT(""));*/
+	yyMeshResource.Path = GetAssetPath(Mesh);
+
+	// sections
+	for (auto& ueSection : LODResource.Sections)
+	{
+		ns_yoyo::FStaticMeshSection yySection;
+		yySection.FirstIndex = ueSection.FirstIndex;
+		yySection.MaterialIndex = ueSection.MaterialIndex;
+		yySection.MaxVertexIndex = ueSection.MaxVertexIndex;
+		yySection.MinVertexIndex = ueSection.MinVertexIndex;
+		yySection.NumTriangles = ueSection.NumTriangles;
+		yySection.bCastShadow = ueSection.bCastShadow;
+		yyMeshResource.Sections.Add(yySection);
+	}
+	
+	// vertex buffer
+	yyMeshResource.VertexBuffer.NumVertices = NumVerts;
+	yyMeshResource.VertexBuffer.Stride = 32; // bytes
+	auto& FloatRawData = yyMeshResource.VertexBuffer.RawData;
+	for (int32 i = 0; i < NumVerts; ++i)
+	{
+		// position
+		auto Position = LODResource.VertexBuffers.PositionVertexBuffer.VertexPosition(i);
+		FloatRawData.Append({ Position.X, Position.Y, Position.Z });
+		// normal
+		auto Normal = LODResource.VertexBuffers.StaticMeshVertexBuffer.VertexTangentZ(i);
+		FloatRawData.Append({ Normal.X, Normal.Y, Normal.Z });
+		// uv
+		auto UV = LODResource.VertexBuffers.StaticMeshVertexBuffer.GetVertexUV(i, 0);
+		FloatRawData.Append({UV.X, UV.Y});
+	}
+
+	// index buffer
+	yyMeshResource.IndexBuffer.NumIndices = NumTris * 3;
+	LODResource.IndexBuffer.GetCopy(yyMeshResource.IndexBuffer.BufferData);
+
+	TArray<uint8> ByteData;
+	FMemoryWriter BytesWriter(ByteData);
+	BytesWriter << yyMeshResource;
+	auto save_path = Path + yyMeshResource.Path;
+	bool bOk = FFileHelper::SaveArrayToFile(ByteData, *save_path);
+#if 0
+	TSharedPtr<FJunMesh> JunMesh = MakeShareable(new FJunMesh);
+	JunMesh->NumVerts = NumVerts;
 	// positions
 	JunMesh->Positions.SetNum(NumVerts);
 	check(LODResource.VertexBuffers.PositionVertexBuffer.GetNumVertices() == NumVerts);
@@ -191,7 +278,6 @@ void UAssetExporterBPLibrary::ExportStaticMeshBinary(UStaticMesh* Mesh, const FS
 	}
 
 	// indices
-	const int32 NumTris = LODResource.GetNumTriangles();
 	JunMesh->NumIndices = NumTris * 3;
 	FRawStaticIndexBuffer& IndexBuffer = LODResource.IndexBuffer;
 	IndexBuffer.GetCopy(JunMesh->Indices);
@@ -217,5 +303,92 @@ void UAssetExporterBPLibrary::ExportStaticMeshBinary(UStaticMesh* Mesh, const FS
 	
 	bool bOk = FFileHelper::SaveArrayToFile(JunMeshBytes, *lPath);
 	UE_LOG(LogTemp, Log, TEXT("[XSJ] Save %s to %s"), *Mesh->GetPathName(), *lPath);
+#endif
+}
+
+void UAssetExporterBPLibrary::ExportAsset(UObject* Asset, const FString& Path)
+{
+	if (Asset->IsA(UWorld::StaticClass()))
+	{
+		return ExportMap(Cast<UWorld>(Asset), Path);
+	}
+	if (Asset->IsA(UStaticMesh::StaticClass()))
+	{
+		return ExportStaticMesh(Cast<UStaticMesh>(Asset), Path);
+	}
+}
+
+void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
+{
+	UE_LOG(LogTemp, Log, TEXT("RootPath = "), *Path);
+
+	ns_yoyo::FLevelSceneInfo yySceneInfo;
+
+	TSet<UStaticMesh*> ExportedStaticMeshes;
+
+	ULevel* Level = World->PersistentLevel;
+	for (AActor* Actor : Level->Actors)
+	{
+		// static mesh
+		if (Actor->IsA(AStaticMeshActor::StaticClass()))
+		{
+			TArray<UActorComponent*> StaticMeshComponents =
+				Actor->GetComponentsByClass(UStaticMeshComponent::StaticClass());
+			// export every static mesh component
+			for (auto Component : StaticMeshComponents)
+			{
+				UStaticMesh* StaticMesh =
+					Cast<UStaticMeshComponent>(Component)->GetStaticMesh();
+				if (StaticMesh)
+				{
+					// cache the mesh for exporting
+					ExportedStaticMeshes.Add(StaticMesh);
+
+					// build static mesh scene info
+					ns_yoyo::FStaticMeshSceneInfo yyStaticMeshSceneInfo;
+					yyStaticMeshSceneInfo.ResourcePath = 
+						GetAssetPath(StaticMesh);
+					yyStaticMeshSceneInfo.Location =
+						Cast<UPrimitiveComponent>(Component)->GetComponentLocation();
+					yyStaticMeshSceneInfo.Rotation =
+						Cast<UPrimitiveComponent>(Component)->GetComponentRotation().Quaternion();
+					yyStaticMeshSceneInfo.Scale =
+						Cast<UPrimitiveComponent>(Component)->GetComponentScale();
+					yySceneInfo.StaticMesheSceneInfos.Emplace(yyStaticMeshSceneInfo);
+				}
+			}
+			continue;
+		}
+		if (Actor->IsA(ACameraActor::StaticClass()))
+		{
+			ExportCamera(Cast<ACameraActor>(Actor), yySceneInfo);
+			continue;
+		}
+		if (Actor->IsA(ADirectionalLight::StaticClass()))
+		{
+			ExportDirectionalLight(Cast<ADirectionalLight>(Actor), yySceneInfo);
+			continue;
+		}
+	}
+
+	// export static meshes
+	for (UStaticMesh* StaticMesh : ExportedStaticMeshes)
+	{
+		// export static mesh asset
+		ExportStaticMesh(StaticMesh, Path);
+	}
+
+	// write to file
+	ns_yoyo::FLevelResource yyLevelResource;
+	yyLevelResource.Path = GetAssetPath(Level);
+	FString SavePath = Path + yyLevelResource.Path;
+	yyLevelResource.SceneInfo = yySceneInfo;
+
+	TArray<uint8> ByteData;
+	FMemoryWriter BytesWriter(ByteData);
+	BytesWriter << yyLevelResource;
+
+	bool bOk = FFileHelper::SaveArrayToFile(ByteData, *SavePath);
+	check(bOk);
 }
 
