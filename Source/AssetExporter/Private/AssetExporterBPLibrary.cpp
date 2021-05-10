@@ -2,23 +2,36 @@
 
 #include "AssetExporterBPLibrary.h"
 #include "AssetExporter.h"
-#include "JsonObjectConverter.h"
-#include "JunJsonAsset.h"
-#include "Engine/StaticMesh.h"
-#include "Engine/StaticMeshActor.h"
-#include "Engine/DirectionalLight.h"
-#include "Misc/FileHelper.h"
-#include "Misc/PackageName.h"
-#include "StaticMeshResources.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
-#include "Rendering/StaticMeshVertexBuffer.h"
-#include "Components/PrimitiveComponent.h"
 #include "Components/DirectionalLightComponent.h"
-#if 0
-#include "StaticMeshAttributes.h"
-#include "MeshElementArray.h"
-#endif
+#include "Components/PrimitiveComponent.h"
+#include "Engine/Classes/Animation/SkeletalMeshActor.h"
+#include "Engine/Classes/GameFramework/Character.h"
+#include "Engine/DirectionalLight.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/StaticMeshActor.h"
+//#include "JsonObjectConverter.h"
+#include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
+#include "Rendering/SkeletalMeshLODRenderData.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "Rendering/SkinWeightVertexBuffer.h"
+#include "Rendering/StaticMeshVertexBuffer.h"
+#include "StaticMeshResources.h"
+
+#include "ExportTypes.h"
+
+template<typename T>
+bool SerializeToFile(T& Obj, const FString& Path)
+{
+	FString SavePath = Path + Obj.Path;
+	TArray<uint8> ByteData;
+	FMemoryWriter BytesWriter(ByteData);
+	BytesWriter << Obj;
+	return FFileHelper::SaveArrayToFile(ByteData, *SavePath);
+}
 
 FString GetAssetPath(UObject* Asset)
 {
@@ -31,83 +44,6 @@ UAssetExporterBPLibrary::UAssetExporterBPLibrary(const FObjectInitializer& Objec
 : Super(ObjectInitializer)
 {
 
-}
-
-float UAssetExporterBPLibrary::AssetExporterSampleFunction(float Param)
-{
-	return -1;
-}
-
-void UAssetExporterBPLibrary::ExportStaticMeshJson(UStaticMesh* Mesh, const FString& Path)
-{
-	/* MeshDescription带有冗余信息，UE4通过MeshDescription重建有BUG，只能得到带冗余的重建结果.
-	*  所以还是通过LodResource重建.
-	*/
-#if 1
-	check(Mesh && Mesh->RenderData && Mesh->RenderData->LODResources.Num() > 0);
-	// 只处理LOD0并认为只有一个材质球
-	FStaticMeshLODResources& LODResource = Mesh->RenderData->LODResources[0];
-	int32 NumVerts = LODResource.GetNumVertices();
-	TSharedPtr<FJsonMesh> JunMesh = MakeShareable(new FJsonMesh);
-	JunMesh->Positions.SetNum(NumVerts);
-	FMemory::Memcpy(JunMesh->Positions.GetData(), LODResource.VertexBuffers.PositionVertexBuffer.GetVertexData(), NumVerts * sizeof(FVector));
-
-	int32 NumTris = LODResource.GetNumTriangles();
-	FRawStaticIndexBuffer& IndexBuffer = LODResource.IndexBuffer;
-	IndexBuffer.GetCopy(JunMesh->Indices);
-	check(JunMesh->Indices.Num() == NumTris * 3);
-#else
-	// get mesh description
-	FMeshDescription* MeshDescriptionPtr = Mesh->GetMeshDescription(0);
-	check(MeshDescriptionPtr);
-	FMeshDescription& MeshDescription = *MeshDescriptionPtr;
-	FStaticMeshConstAttributes MeshDescriptionAttributes(MeshDescription);
-
-	TSharedPtr<FJsonMesh> JunMesh = MakeShareable(new FJsonMesh);
-	
-	// get vertices
-	int32 NumVertexInstances = MeshDescription.VertexInstances().GetArraySize();
-	JunMesh->Positions.SetNum(NumVertexInstances);
-
-	TVertexAttributesConstRef<FVector> VertexPositions = MeshDescriptionAttributes.GetVertexPositions();
-	for (FVertexInstanceID VertexInstanceID : MeshDescription.VertexInstances().GetElementIDs())
-	{
-		JunMesh->Positions.Add(VertexPositions[MeshDescription.GetVertexInstanceVertex(VertexInstanceID)]);
-	}
-
-	// get indices
-	int32 NumTriangles = MeshDescription.Triangles().Num();
-	JunMesh->Indices.SetNumZeroed(NumTriangles * 3);
-
-	for (FPolygonGroupID PolygonGroupID : MeshDescription.PolygonGroups().GetElementIDs())
-	{
-		if (MeshDescription.GetNumPolygonGroupPolygons(PolygonGroupID) == 0)
-		{
-			continue;
-		}
-		for (FPolygonID PolygonID : MeshDescription.GetPolygonGroupPolygons(PolygonGroupID))
-		{
-			for (FTriangleID TriangleID : MeshDescription.GetPolygonTriangleIDs(PolygonID))
-			{
-				for (FVertexInstanceID TriangleVertexInstanceIDs : MeshDescription.GetTriangleVertexInstances(TriangleID))
-				{
-					uint32 VertexIndex = static_cast<uint32>(TriangleVertexInstanceIDs.GetValue());
-					JunMesh->Indices.Add(VertexIndex);
-				}
-			}
-		}
-	}
-#endif
-
-	// export to json and save
-	FString JsonStr;
-	FJsonObjectConverter::UStructToJsonObjectString(*JunMesh, JsonStr);
-	FString lPath = Path;
-	if (lPath.IsEmpty())
-	{
-		lPath = FPackageName::LongPackageNameToFilename(Mesh->GetPackage()->GetPathName());
-	}
-	FFileHelper::SaveStringToFile(JsonStr, *lPath);
 }
 
 void UAssetExporterBPLibrary::ExportCamera(ACameraActor* Camera,
@@ -192,19 +128,63 @@ void UAssetExporterBPLibrary::ExportDirectionalLight(ADirectionalLight* UELight,
 	yyLight.Intensity = LightComponent->Intensity;
 }
 
-struct FJunMesh
+void UAssetExporterBPLibrary::ExportSkeletalMesh(USkeletalMesh* SkelMesh, const FString& Path)
 {
-	int32 NumVerts;
-	int32 NumIndices;
-	TArray<FVector> Positions;
-	TArray<FVector> Normals;
-	TArray<uint32> Indices;
-};
+	ns_yoyo::FSkeletalMeshResource yySkeletalMeshResource;
 
-/*
-Export mesh to a custom formated binary file. See FJunMesh.
-Just lod0 will be exported and one material is supported.
-*/
+	check(SkelMesh);
+	FSkeletalMeshRenderData* RenderData = SkelMesh->GetResourceForRendering();
+	check(RenderData && RenderData->LODRenderData.Num() > 0);
+	FSkeletalMeshLODRenderData& LOD0 = RenderData->LODRenderData[0];
+
+	// fill the path
+	yySkeletalMeshResource.Path = GetAssetPath(SkelMesh);
+
+	// fill the sections
+	int32 NumTriangles = 0;
+	for (FSkelMeshRenderSection& ueSection : LOD0.RenderSections)
+	{
+		ns_yoyo::FSkelMeshRenderSection yySkelMeshRenderSection;
+		yySkelMeshRenderSection.BaseIndex = ueSection.BaseIndex;
+		yySkelMeshRenderSection.BaseVertexIndex = ueSection.BaseVertexIndex;
+		yySkelMeshRenderSection.bCastShadow = ueSection.bCastShadow;
+		yySkelMeshRenderSection.MaterialIndex = ueSection.MaterialIndex;
+		yySkelMeshRenderSection.MaxBoneInfluences = ueSection.MaxBoneInfluences;
+		yySkelMeshRenderSection.NumTriangles = ueSection.NumTriangles;
+		yySkelMeshRenderSection.NumVertices = ueSection.NumVertices;
+		yySkelMeshRenderSection.BoneMap.Reserve(ueSection.BoneMap.Num());
+		for (auto& BoneIndex : ueSection.BoneMap)
+		{
+			yySkelMeshRenderSection.BoneMap.Add(BoneIndex);
+		}
+		yySkeletalMeshResource.RenderSections.Add(yySkelMeshRenderSection);
+		NumTriangles += ueSection.NumTriangles;
+	}
+
+	// vertex buffer
+	ns_yoyo::ExportVertexBuffer(yySkeletalMeshResource.VertexBuffer, LOD0.StaticVertexBuffers);
+
+	// index buffer
+	ns_yoyo::ExportMultiSizeIndexContainer(yySkeletalMeshResource.IndexBuffer, LOD0.MultiSizeIndexContainer);
+	check(yySkeletalMeshResource.IndexBuffer.NumIndices == NumTriangles * 3);
+
+	// skin weight buffer
+	FSkinWeightVertexBuffer* WeightVertexBuffer = LOD0.GetSkinWeightVertexBuffer();
+	TArray<FSkinWeightInfo> SkinWeightInfos;
+	WeightVertexBuffer->GetSkinWeights(SkinWeightInfos);
+	for (auto& WeightInfo : SkinWeightInfos)
+	{
+		ns_yoyo::FSkinWeightInfo yyInfo;
+		FMemory::Memcpy(yyInfo.InfluenceBones, WeightInfo.InfluenceBones, sizeof(FBoneIndexType) * 4);
+		FMemory::Memcpy(yyInfo.InfluenceWeights, WeightInfo.InfluenceWeights, sizeof(uint8) * 4);
+		yySkeletalMeshResource.SkinWeightBuffer.SkinWeightInfos.Emplace(yyInfo);
+	}
+
+	// serialize to file
+	bool bOk = SerializeToFile(yySkeletalMeshResource, Path);
+	check(bOk);
+}
+
 void UAssetExporterBPLibrary::ExportStaticMesh(UStaticMesh* Mesh, const FString& Path)
 {
 	// check and get the lod0 resource
@@ -214,11 +194,8 @@ void UAssetExporterBPLibrary::ExportStaticMesh(UStaticMesh* Mesh, const FString&
 	const int32 NumTris = LODResource.GetNumTriangles();
 
 	ns_yoyo::FStaticMeshResource yyMeshResource;
+
 	// build resource path
-	/*auto mesh_path = Mesh->GetPathName();
-	auto package_path = Mesh->GetPackage()->GetPathName();
-	auto package_file = FPackageName::LongPackageNameToFilename(Mesh->GetPackage()->GetPathName());
-	package_path.ReplaceInline(TEXT("/Game"), TEXT(""));*/
 	yyMeshResource.Path = GetAssetPath(Mesh);
 
 	// sections
@@ -235,75 +212,15 @@ void UAssetExporterBPLibrary::ExportStaticMesh(UStaticMesh* Mesh, const FString&
 	}
 	
 	// vertex buffer
-	yyMeshResource.VertexBuffer.NumVertices = NumVerts;
-	yyMeshResource.VertexBuffer.Stride = 32; // bytes
-	auto& FloatRawData = yyMeshResource.VertexBuffer.RawData;
-	for (int32 i = 0; i < NumVerts; ++i)
-	{
-		// position
-		auto Position = LODResource.VertexBuffers.PositionVertexBuffer.VertexPosition(i);
-		FloatRawData.Append({ Position.X, Position.Y, Position.Z });
-		// normal
-		auto Normal = LODResource.VertexBuffers.StaticMeshVertexBuffer.VertexTangentZ(i);
-		FloatRawData.Append({ Normal.X, Normal.Y, Normal.Z });
-		// uv
-		auto UV = LODResource.VertexBuffers.StaticMeshVertexBuffer.GetVertexUV(i, 0);
-		FloatRawData.Append({UV.X, UV.Y});
-	}
+	ns_yoyo::ExportVertexBuffer(yyMeshResource.VertexBuffer, LODResource.VertexBuffers);
 
 	// index buffer
-	yyMeshResource.IndexBuffer.NumIndices = NumTris * 3;
-	LODResource.IndexBuffer.GetCopy(yyMeshResource.IndexBuffer.BufferData);
+	ns_yoyo::ExportStaticIndexBuffer(yyMeshResource.IndexBuffer, LODResource.IndexBuffer);
+	check(yyMeshResource.IndexBuffer.NumIndices == NumTris * 3);
 
-	TArray<uint8> ByteData;
-	FMemoryWriter BytesWriter(ByteData);
-	BytesWriter << yyMeshResource;
-	auto save_path = Path + yyMeshResource.Path;
-	bool bOk = FFileHelper::SaveArrayToFile(ByteData, *save_path);
-#if 0
-	TSharedPtr<FJunMesh> JunMesh = MakeShareable(new FJunMesh);
-	JunMesh->NumVerts = NumVerts;
-	// positions
-	JunMesh->Positions.SetNum(NumVerts);
-	check(LODResource.VertexBuffers.PositionVertexBuffer.GetNumVertices() == NumVerts);
-	check(LODResource.VertexBuffers.PositionVertexBuffer.GetStride());
-	FMemory::Memcpy(JunMesh->Positions.GetData(), LODResource.VertexBuffers.PositionVertexBuffer.GetVertexData(), NumVerts * sizeof(FVector));
-
-	// normals
-	JunMesh->Normals.SetNum(NumVerts);
-	FStaticMeshVertexBuffer& StaticMeshVertexBuffer = LODResource.VertexBuffers.StaticMeshVertexBuffer;
-	for (int32 i = 0; i < NumVerts; ++i)
-	{
-		JunMesh->Normals[i] = (FVector)StaticMeshVertexBuffer.VertexTangentZ(i);
-	}
-
-	// indices
-	JunMesh->NumIndices = NumTris * 3;
-	FRawStaticIndexBuffer& IndexBuffer = LODResource.IndexBuffer;
-	IndexBuffer.GetCopy(JunMesh->Indices);
-	check(JunMesh->Indices.Num() == JunMesh->NumIndices);
-
-	// export to file
-	FString lPath = Path;
-	if (lPath.IsEmpty())
-	{
-		lPath = FPackageName::LongPackageNameToFilename(Mesh->GetPackage()->GetPathName());
-	}
-	TArray<uint8> JunMeshBytes;
-	JunMeshBytes.SetNum(sizeof(int32) * 2
-		+(JunMesh->Positions.Num() + JunMesh->Normals.Num()) * sizeof(FVector)
-		+JunMesh->Indices.Num() * sizeof(uint32));
-	FMemory::Memcpy(JunMeshBytes.GetData(), &JunMesh->NumVerts, sizeof(int32));
-	FMemory::Memcpy(JunMeshBytes.GetData() + sizeof(int32), &JunMesh->NumIndices, sizeof(int32));
-	FMemory::Memcpy(JunMeshBytes.GetData() + sizeof(int32) * 2, JunMesh->Positions.GetData(), JunMesh->Positions.Num() * sizeof(FVector));
-	FMemory::Memcpy(JunMeshBytes.GetData() + sizeof(int32) * 2 + JunMesh->Positions.Num() * sizeof(FVector),
-		JunMesh->Normals.GetData(), JunMesh->Normals.Num() * sizeof(FVector));
-	FMemory::Memcpy(JunMeshBytes.GetData() + sizeof(int32) * 2 + (JunMesh->Positions.Num()+ JunMesh->Normals.Num()) * sizeof(FVector),
-		JunMesh->Indices.GetData(), JunMesh->Indices.Num() * sizeof(uint32));
-	
-	bool bOk = FFileHelper::SaveArrayToFile(JunMeshBytes, *lPath);
-	UE_LOG(LogTemp, Log, TEXT("[XSJ] Save %s to %s"), *Mesh->GetPathName(), *lPath);
-#endif
+	// serialize to file
+	bool bOk = SerializeToFile(yyMeshResource, Path);
+	check(bOk);
 }
 
 void UAssetExporterBPLibrary::ExportAsset(UObject* Asset, const FString& Path)
@@ -316,6 +233,10 @@ void UAssetExporterBPLibrary::ExportAsset(UObject* Asset, const FString& Path)
 	{
 		return ExportStaticMesh(Cast<UStaticMesh>(Asset), Path);
 	}
+	if (Asset->IsA(USkeletalMesh::StaticClass()))
+	{
+		return ExportSkeletalMesh(Cast<USkeletalMesh>(Asset), Path);
+	}
 }
 
 void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
@@ -325,6 +246,7 @@ void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
 	ns_yoyo::FLevelSceneInfo yySceneInfo;
 
 	TSet<UStaticMesh*> ExportedStaticMeshes;
+	TSet<USkeletalMesh*> ExportedSkelMeshes;
 
 	ULevel* Level = World->PersistentLevel;
 	for (AActor* Actor : Level->Actors)
@@ -332,8 +254,8 @@ void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
 		// static mesh
 		if (Actor->IsA(AStaticMeshActor::StaticClass()))
 		{
-			TArray<UActorComponent*> StaticMeshComponents =
-				Actor->GetComponentsByClass(UStaticMeshComponent::StaticClass());
+			TArray<UStaticMeshComponent*> StaticMeshComponents;
+			Actor->GetComponents(StaticMeshComponents);
 			// export every static mesh component
 			for (auto Component : StaticMeshComponents)
 			{
@@ -359,6 +281,23 @@ void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
 			}
 			continue;
 		}
+		if (Actor->IsA(ASkeletalMeshActor::StaticClass()) ||
+			Actor->IsA(ACharacter::StaticClass()))
+		{
+			TArray<USkeletalMeshComponent*> SkelMeshComponents;
+			Actor->GetComponents(SkelMeshComponents);
+			for (auto Component : SkelMeshComponents)
+			{
+				USkeletalMesh* SkelMesh = Component->SkeletalMesh;
+				if (SkelMesh)
+				{
+					ExportedSkelMeshes.Add(SkelMesh);
+					// build static mesh scene info
+
+				}
+			}
+			continue;
+		}
 		if (Actor->IsA(ACameraActor::StaticClass()))
 		{
 			ExportCamera(Cast<ACameraActor>(Actor), yySceneInfo);
@@ -378,17 +317,106 @@ void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
 		ExportStaticMesh(StaticMesh, Path);
 	}
 
+	// export skeletal meshes
+	for (USkeletalMesh* SkelMesh : ExportedSkelMeshes)
+	{
+		ExportSkeletalMesh(SkelMesh, Path);
+	}
+
 	// write to file
 	ns_yoyo::FLevelResource yyLevelResource;
 	yyLevelResource.Path = GetAssetPath(Level);
-	FString SavePath = Path + yyLevelResource.Path;
 	yyLevelResource.SceneInfo = yySceneInfo;
 
+#if 1
+	bool bOk = SerializeToFile(yyLevelResource, Path);
+	check(bOk);
+#else
 	TArray<uint8> ByteData;
 	FMemoryWriter BytesWriter(ByteData);
 	BytesWriter << yyLevelResource;
-
 	bool bOk = FFileHelper::SaveArrayToFile(ByteData, *SavePath);
 	check(bOk);
+#endif // 1
 }
 
+/*
+struct FJunMesh
+{
+	int32 NumVerts;
+	int32 NumIndices;
+	TArray<FVector> Positions;
+	TArray<FVector> Normals;
+	TArray<uint32> Indices;
+};
+void UAssetExporterBPLibrary::ExportStaticMeshJson(UStaticMesh* Mesh, const FString& Path)
+{
+	///MeshDescription带有冗余信息，UE4通过MeshDescription重建有BUG，只能得到带冗余的重建结果.
+	///所以还是通过LodResource重建.
+	///
+#if 1
+	check(Mesh && Mesh->RenderData && Mesh->RenderData->LODResources.Num() > 0);
+	// 只处理LOD0并认为只有一个材质球
+	FStaticMeshLODResources& LODResource = Mesh->RenderData->LODResources[0];
+	int32 NumVerts = LODResource.GetNumVertices();
+	TSharedPtr<FJsonMesh> JunMesh = MakeShareable(new FJsonMesh);
+	JunMesh->Positions.SetNum(NumVerts);
+	FMemory::Memcpy(JunMesh->Positions.GetData(), LODResource.VertexBuffers.PositionVertexBuffer.GetVertexData(), NumVerts * sizeof(FVector));
+
+	int32 NumTris = LODResource.GetNumTriangles();
+	FRawStaticIndexBuffer& IndexBuffer = LODResource.IndexBuffer;
+	IndexBuffer.GetCopy(JunMesh->Indices);
+	check(JunMesh->Indices.Num() == NumTris * 3);
+#else
+	// get mesh description
+	FMeshDescription* MeshDescriptionPtr = Mesh->GetMeshDescription(0);
+	check(MeshDescriptionPtr);
+	FMeshDescription& MeshDescription = *MeshDescriptionPtr;
+	FStaticMeshConstAttributes MeshDescriptionAttributes(MeshDescription);
+
+	TSharedPtr<FJsonMesh> JunMesh = MakeShareable(new FJsonMesh);
+
+	// get vertices
+	int32 NumVertexInstances = MeshDescription.VertexInstances().GetArraySize();
+	JunMesh->Positions.SetNum(NumVertexInstances);
+
+	TVertexAttributesConstRef<FVector> VertexPositions = MeshDescriptionAttributes.GetVertexPositions();
+	for (FVertexInstanceID VertexInstanceID : MeshDescription.VertexInstances().GetElementIDs())
+	{
+		JunMesh->Positions.Add(VertexPositions[MeshDescription.GetVertexInstanceVertex(VertexInstanceID)]);
+	}
+
+	// get indices
+	int32 NumTriangles = MeshDescription.Triangles().Num();
+	JunMesh->Indices.SetNumZeroed(NumTriangles * 3);
+
+	for (FPolygonGroupID PolygonGroupID : MeshDescription.PolygonGroups().GetElementIDs())
+	{
+		if (MeshDescription.GetNumPolygonGroupPolygons(PolygonGroupID) == 0)
+		{
+			continue;
+		}
+		for (FPolygonID PolygonID : MeshDescription.GetPolygonGroupPolygons(PolygonGroupID))
+		{
+			for (FTriangleID TriangleID : MeshDescription.GetPolygonTriangleIDs(PolygonID))
+			{
+				for (FVertexInstanceID TriangleVertexInstanceIDs : MeshDescription.GetTriangleVertexInstances(TriangleID))
+				{
+					uint32 VertexIndex = static_cast<uint32>(TriangleVertexInstanceIDs.GetValue());
+					JunMesh->Indices.Add(VertexIndex);
+				}
+			}
+		}
+	}
+#endif
+
+	// export to json and save
+	FString JsonStr;
+	FJsonObjectConverter::UStructToJsonObjectString(*JunMesh, JsonStr);
+	FString lPath = Path;
+	if (lPath.IsEmpty())
+	{
+		lPath = FPackageName::LongPackageNameToFilename(Mesh->GetPackage()->GetPathName());
+	}
+	FFileHelper::SaveStringToFile(JsonStr, *lPath);
+}*/
