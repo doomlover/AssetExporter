@@ -18,12 +18,12 @@ namespace ns_yoyo
 		Max
 	};
 
-	struct FTransform
+	struct KTransform
 	{
 		FQuat Rot; // (x,y,z,w)
 		FVector Trans;
 		FVector Scale;
-		friend FArchive& operator<<(FArchive& Ar, FTransform& T)
+		friend FArchive& operator<<(FArchive& Ar, KTransform& T)
 		{
 			return Ar << T.Rot
 				<< T.Trans
@@ -47,7 +47,7 @@ namespace ns_yoyo
 			}
 		};
 		TArray<FBoneInfo> BoneInfos;
-		TArray<FTransform> BonePoses;
+		TArray<KTransform> BonePoses;
 
 		friend FArchive& operator<<(FArchive& Ar, FSkeleton& Skel)
 		{
@@ -268,16 +268,12 @@ namespace ns_yoyo
 		// path relative to the Content folder
 		FString ResourcePath;
 		// world transformation
-		FVector Location;
-		FQuat Rotation;
-		FVector Scale;
+		KTransform Transform;
 		inline friend FArchive& operator<<(FArchive& Ar,
 			FStaticMeshSceneInfo& StaticMeshSceneInfo)
 		{
 			return Ar << StaticMeshSceneInfo.ResourcePath
-				<< StaticMeshSceneInfo.Location
-				<< StaticMeshSceneInfo.Rotation
-				<< StaticMeshSceneInfo.Scale;
+				<< StaticMeshSceneInfo.Transform;
 		}
 	};
 
@@ -286,7 +282,7 @@ namespace ns_yoyo
 		// path relative to the Content folder
 		FString ResourcePath;
 		// world transformation
-		FTransform Transform;
+		KTransform Transform;
 		inline friend FArchive& operator<<(FArchive& Ar, FSkeletalMeshSceneInfo& Info)
 		{
 			return Ar << Info.ResourcePath
@@ -365,6 +361,8 @@ namespace ns_yoyo
 	void ExportStaticIndexBuffer(FIndexBuffer& yyIndexBuffer, FRawStaticIndexBuffer& ueIndexBuffer);
 
 	void ExportMultiSizeIndexContainer(FIndexBuffer& yyIndexBuffer, FMultiSizeIndexContainer& ueIndexContainer);
+
+	ns_yoyo::KTransform GetTransform(UPrimitiveComponent* Component);
 
 	inline FVector4 Quat2Vec4(const FQuat& Quat)
 	{

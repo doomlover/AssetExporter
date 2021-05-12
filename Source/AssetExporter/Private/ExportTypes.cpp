@@ -42,3 +42,13 @@ void ns_yoyo::ExportMultiSizeIndexContainer(FIndexBuffer& yyIndexBuffer, FMultiS
 	yyIndexBuffer.NumIndices = yyIndexBuffer.BufferData.Num();
 }
 
+ns_yoyo::KTransform ns_yoyo::GetTransform(UPrimitiveComponent* Component)
+{
+	ns_yoyo::KTransform Trans;
+	auto ueTrans = Component->GetComponentTransform();
+	Trans.Trans = ueTrans.GetLocation();
+	Trans.Rot = ueTrans.GetRotation();
+	Trans.Scale = ueTrans.GetScale3D();
+	return Trans;
+}
+

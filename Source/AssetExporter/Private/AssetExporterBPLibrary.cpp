@@ -371,12 +371,7 @@ void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
 					ns_yoyo::FStaticMeshSceneInfo yyStaticMeshSceneInfo;
 					yyStaticMeshSceneInfo.ResourcePath = 
 						GetAssetPath<ns_yoyo::EResourceType::StaticMesh>(StaticMesh);
-					yyStaticMeshSceneInfo.Location =
-						Cast<UPrimitiveComponent>(Component)->GetComponentLocation();
-					yyStaticMeshSceneInfo.Rotation =
-						Cast<UPrimitiveComponent>(Component)->GetComponentRotation().Quaternion();
-					yyStaticMeshSceneInfo.Scale =
-						Cast<UPrimitiveComponent>(Component)->GetComponentScale();
+					yyStaticMeshSceneInfo.Transform = ns_yoyo::GetTransform(Component);
 					yySceneInfo.StaticMesheSceneInfos.Emplace(yyStaticMeshSceneInfo);
 				}
 			}
@@ -395,10 +390,9 @@ void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
 					ExportedSkelMeshes.Add(SkelMesh);
 					// build skeletal mesh scene info
 					ns_yoyo::FSkeletalMeshSceneInfo yySkelMeshSceneInfo;
-					yySkelMeshSceneInfo.ResourcePath = GetAssetPath<ns_yoyo::EResourceType::SkeletalMesh>(SkelMesh);
-					yySkelMeshSceneInfo.Transform.Rot = Component->GetComponentQuat();
-					yySkelMeshSceneInfo.Transform.Trans = Component->GetComponentLocation();
-					yySkelMeshSceneInfo.Transform.Scale = Component->GetComponentScale();
+					yySkelMeshSceneInfo.ResourcePath =
+						GetAssetPath<ns_yoyo::EResourceType::SkeletalMesh>(SkelMesh);
+					yySkelMeshSceneInfo.Transform = ns_yoyo::GetTransform(Component);
 					yySceneInfo.SkelMeshSceneInfos.Emplace(yySkelMeshSceneInfo);
 				}
 				if (EAnimationMode::AnimationSingleNode == Component->GetAnimationMode())
