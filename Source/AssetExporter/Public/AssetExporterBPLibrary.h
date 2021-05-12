@@ -27,6 +27,8 @@ class UStaticMesh;
 class ACameraActor;
 class ADirectionalLight;
 class USkeletalMesh;
+class UAnimSequence;
+class USkeleton;
 
 namespace ns_yoyo
 {
@@ -59,4 +61,8 @@ class ASSETEXPORTER_API UAssetExporterBPLibrary : public UBlueprintFunctionLibra
 		ns_yoyo::FLevelSceneInfo& LevelSceneInfo);
 
 	static void ExportSkeletalMesh(USkeletalMesh* SkelMesh, const FString& Path);
+
+	static void ExportAnimSequence(UAnimSequence* AnimSequence, const FString& Path);
+
+	static void ExportSkeleton(USkeleton* Skeleton, const FString& Path);
 };

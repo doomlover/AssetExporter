@@ -13,7 +13,81 @@ namespace ns_yoyo
 		Level,
 		StaticMesh,
 		SkeletalMesh,
+		AnimSequence,
+		Skeleton,
 		Max
+	};
+
+	struct FTransform
+	{
+		FQuat Rot; // (x,y,z,w)
+		FVector Trans;
+		FVector Scale;
+		friend FArchive& operator<<(FArchive& Ar, FTransform& T)
+		{
+			return Ar << T.Rot
+				<< T.Trans
+				<< T.Scale;
+		}
+	};
+
+	struct FSkeleton
+	{
+		ns_yoyo::EResourceType Type = EResourceType::Skeleton;
+		FString Path;
+
+		struct FBoneInfo
+		{
+			FString Name;
+			int32 ParentIndex;
+			friend FArchive& operator<<(FArchive& Ar, FBoneInfo& BoneInfo)
+			{
+				return Ar << BoneInfo.Name
+					<< BoneInfo.ParentIndex;
+			}
+		};
+		TArray<FBoneInfo> BoneInfos;
+		TArray<FTransform> BonePoses;
+
+		friend FArchive& operator<<(FArchive& Ar, FSkeleton& Skel)
+		{
+			Ar << Skel.Type
+				<< Skel.Path
+				<< Skel.BoneInfos;
+			// typeSize, arrayCount, bulkData
+			Skel.BonePoses.BulkSerialize(Ar);
+			return Ar;
+		}
+	};
+
+	struct FAnimSequenceResource
+	{
+		ns_yoyo::EResourceType Type = EResourceType::AnimSequence;
+		FString Path;
+
+		struct FTrack
+		{
+			TArray<FVector> PosKeys;
+			TArray<FQuat> RotKeys;
+			TArray<FVector> ScaleKeys;
+			friend FArchive& operator<<(FArchive& Ar, FTrack& Tracks)
+			{
+				return Ar << Tracks.PosKeys
+					<< Tracks.RotKeys
+					<< Tracks.ScaleKeys;
+			}
+		};
+		int32 NumFrames;
+		TArray<FTrack> RawAnimationData;
+		FString SkelAssetPath;
+		friend FArchive& operator<<(FArchive& Ar, FAnimSequenceResource& AnimSeq)
+		{
+			return Ar << AnimSeq.Type
+				<< AnimSeq.Path
+				<< AnimSeq.NumFrames
+				<< AnimSeq.RawAnimationData
+				<< AnimSeq.SkelAssetPath;
+		}
 	};
 
 	class FVertexBuffer
@@ -173,6 +247,8 @@ namespace ns_yoyo
 		FIndexBuffer IndexBuffer;
 		// skin weight data
 		FSkinWeightBuffer SkinWeightBuffer;
+		// referenced skeleton
+		FString SkelAssetPath;
 
 		inline friend FArchive& operator<<(FArchive& Ar, FSkeletalMeshResource& Resource)
 		{
@@ -182,7 +258,8 @@ namespace ns_yoyo
 				<< Resource.RenderSections
 				<< Resource.VertexBuffer
 				<< Resource.IndexBuffer
-				<< Resource.SkinWeightBuffer;
+				<< Resource.SkinWeightBuffer
+				<< Resource.SkelAssetPath;
 		}
 	};
 
@@ -194,16 +271,28 @@ namespace ns_yoyo
 		FVector Location;
 		FQuat Rotation;
 		FVector Scale;
+		inline friend FArchive& operator<<(FArchive& Ar,
+			FStaticMeshSceneInfo& StaticMeshSceneInfo)
+		{
+			return Ar << StaticMeshSceneInfo.ResourcePath
+				<< StaticMeshSceneInfo.Location
+				<< StaticMeshSceneInfo.Rotation
+				<< StaticMeshSceneInfo.Scale;
+		}
 	};
 
-	inline FArchive& operator<<(FArchive& Ar,
-		FStaticMeshSceneInfo& StaticMeshSceneInfo)
+	struct FSkeletalMeshSceneInfo
 	{
-		return Ar << StaticMeshSceneInfo.ResourcePath
-			<< StaticMeshSceneInfo.Location
-			<< StaticMeshSceneInfo.Rotation
-			<< StaticMeshSceneInfo.Scale;
-	}
+		// path relative to the Content folder
+		FString ResourcePath;
+		// world transformation
+		FTransform Transform;
+		inline friend FArchive& operator<<(FArchive& Ar, FSkeletalMeshSceneInfo& Info)
+		{
+			return Ar << Info.ResourcePath
+				<< Info.Transform;
+		}
+	};
 
 	struct FDirectionalLightSceneInfo
 	{
@@ -245,12 +334,14 @@ namespace ns_yoyo
 		FCameraSceneInfo Camera;
 		FDirectionalLightSceneInfo DirectionalLight;
 		TArray<FStaticMeshSceneInfo> StaticMesheSceneInfos;
+		TArray<FSkeletalMeshSceneInfo> SkelMeshSceneInfos;
 
 		friend FArchive& operator<<(FArchive& Ar, FLevelSceneInfo& SceneInfo)
 		{
 			Ar << SceneInfo.Camera;
 			Ar << SceneInfo.DirectionalLight;
 			Ar << SceneInfo.StaticMesheSceneInfos;
+			Ar << SceneInfo.SkelMeshSceneInfos;
 			return Ar;
 		}
 	};
@@ -274,4 +365,14 @@ namespace ns_yoyo
 	void ExportStaticIndexBuffer(FIndexBuffer& yyIndexBuffer, FRawStaticIndexBuffer& ueIndexBuffer);
 
 	void ExportMultiSizeIndexContainer(FIndexBuffer& yyIndexBuffer, FMultiSizeIndexContainer& ueIndexContainer);
+
+	inline FVector4 Quat2Vec4(const FQuat& Quat)
+	{
+		FVector4 v4;
+		v4.X = Quat.X;
+		v4.Y = Quat.Y;
+		v4.Z = Quat.Z;
+		v4.W = Quat.W;
+		return v4;
+	}
 }

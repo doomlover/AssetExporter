@@ -2,11 +2,14 @@
 
 #include "AssetExporterBPLibrary.h"
 #include "AssetExporter.h"
+#include "Animation/AnimTypes.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Engine/Classes/Animation/SkeletalMeshActor.h"
+#include "Engine/Classes/Animation/AnimSequence.h"
+#include "Engine/Classes/Animation/Skeleton.h"
 #include "Engine/Classes/GameFramework/Character.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/SkeletalMesh.h"
@@ -20,6 +23,8 @@
 #include "Rendering/SkinWeightVertexBuffer.h"
 #include "Rendering/StaticMeshVertexBuffer.h"
 #include "StaticMeshResources.h"
+#include "SingleAnimationPlayData.h"
+#include "ReferenceSkeleton.h"
 
 #include "ExportTypes.h"
 
@@ -32,13 +37,44 @@ bool SerializeToFile(T& Obj, const FString& Path)
 	BytesWriter << Obj;
 	return FFileHelper::SaveArrayToFile(ByteData, *SavePath);
 }
-
+#if 1
+template<ns_yoyo::EResourceType ResourceType>
+FString GetAssetPath(UObject* Asset)
+{
+	auto package_path = Asset->GetPackage()->GetPathName();
+	package_path.ReplaceInline(TEXT("/Game"), TEXT(""));
+	switch (ResourceType)
+	{
+	case ns_yoyo::EResourceType::Level:
+		package_path += TEXT(".scene");
+		break;
+	case ns_yoyo::EResourceType::StaticMesh:
+		package_path += TEXT(".mesh");
+		break;
+	case ns_yoyo::EResourceType::SkeletalMesh:
+		package_path += TEXT(".skelmesh");
+		break;
+	case ns_yoyo::EResourceType::AnimSequence:
+		package_path += TEXT(".anim");
+		break;
+	case ns_yoyo::EResourceType::Skeleton:
+		package_path += TEXT(".skel");
+		break;
+	case ns_yoyo::EResourceType::Max:
+	default:
+		check(false);
+		break;
+	}
+	return package_path;
+}
+#else
 FString GetAssetPath(UObject* Asset)
 {
 	auto package_path = Asset->GetPackage()->GetPathName();
 	package_path.ReplaceInline(TEXT("/Game"), TEXT(""));
 	return package_path;
 }
+#endif
 
 UAssetExporterBPLibrary::UAssetExporterBPLibrary(const FObjectInitializer& ObjectInitializer)
 : Super(ObjectInitializer)
@@ -138,7 +174,8 @@ void UAssetExporterBPLibrary::ExportSkeletalMesh(USkeletalMesh* SkelMesh, const 
 	FSkeletalMeshLODRenderData& LOD0 = RenderData->LODRenderData[0];
 
 	// fill the path
-	yySkeletalMeshResource.Path = GetAssetPath(SkelMesh);
+	yySkeletalMeshResource.Path = GetAssetPath<ns_yoyo::EResourceType::SkeletalMesh>(SkelMesh);
+	yySkeletalMeshResource.SkelAssetPath = GetAssetPath<ns_yoyo::EResourceType::Skeleton>(SkelMesh->Skeleton);
 
 	// fill the sections
 	int32 NumTriangles = 0;
@@ -185,6 +222,60 @@ void UAssetExporterBPLibrary::ExportSkeletalMesh(USkeletalMesh* SkelMesh, const 
 	check(bOk);
 }
 
+void UAssetExporterBPLibrary::ExportAnimSequence(UAnimSequence* AnimSequence, const FString& Path)
+{
+	check(AnimSequence);
+	const TArray<FRawAnimSequenceTrack>& BoneTracks = AnimSequence->GetRawAnimationData();
+	int32 NumRawFrames = AnimSequence->GetRawNumberOfFrames();
+	int32 NumFrames = AnimSequence->GetNumberOfFrames();
+	//const TArray<FTrackToSkeletonMap>& TrackBoneIndices = AnimSequence->GetRawTrackToSkeletonMapTable();
+
+	ns_yoyo::FAnimSequenceResource yyAnimSequence;
+	yyAnimSequence.Path = GetAssetPath<ns_yoyo::EResourceType::AnimSequence>(AnimSequence);
+	yyAnimSequence.NumFrames = NumRawFrames;
+	yyAnimSequence.RawAnimationData.AddZeroed(BoneTracks.Num());
+	for (int32 i = 0; i < BoneTracks.Num(); ++i)
+	{
+		yyAnimSequence.RawAnimationData[i].PosKeys = BoneTracks[i].PosKeys;
+		yyAnimSequence.RawAnimationData[i].RotKeys = BoneTracks[i].RotKeys;
+		yyAnimSequence.RawAnimationData[i].ScaleKeys = BoneTracks[i].ScaleKeys;
+	}
+	USkeleton* Skeleton = AnimSequence->GetSkeleton();
+	check(Skeleton);
+	yyAnimSequence.SkelAssetPath = GetAssetPath<ns_yoyo::EResourceType::Skeleton>(Skeleton);
+
+	bool bOk = SerializeToFile(yyAnimSequence, Path);
+	check(bOk);
+}
+
+void UAssetExporterBPLibrary::ExportSkeleton(USkeleton* Skeleton, const FString& Path)
+{
+	check(Skeleton);
+	const FReferenceSkeleton& ReferenceSkel = Skeleton->GetReferenceSkeleton();
+	const TArray<FMeshBoneInfo>& BoneInfo = ReferenceSkel.GetRawRefBoneInfo();
+	const TArray<FTransform>& BonePose = ReferenceSkel.GetRawRefBonePose();
+
+	ns_yoyo::FSkeleton yySkeleton;
+	yySkeleton.Path = GetAssetPath<ns_yoyo::EResourceType::Skeleton>(Skeleton);
+	yySkeleton.BoneInfos.AddZeroed(BoneInfo.Num());
+	for (int32 i = 0; i < BoneInfo.Num(); ++i)
+	{
+		yySkeleton.BoneInfos[i].Name = BoneInfo[i].ExportName;
+		yySkeleton.BoneInfos[i].ParentIndex = BoneInfo[i].ParentIndex;
+	}
+	yySkeleton.BonePoses.AddZeroed(BonePose.Num());
+	for (int32 i = 0; i < BonePose.Num(); ++i)
+	{
+		//yySkeleton.BonePoses[i].Rot = ns_yoyo::Quat2Vec4(BonePose[i].Rotator().Quaternion());
+		yySkeleton.BonePoses[i].Rot = BonePose[i].Rotator().Quaternion();
+		yySkeleton.BonePoses[i].Trans = BonePose[i].GetLocation();
+		yySkeleton.BonePoses[i].Scale = BonePose[i].GetScale3D();
+	}
+
+	bool bOk = SerializeToFile(yySkeleton, Path);
+	check(bOk);
+}
+
 void UAssetExporterBPLibrary::ExportStaticMesh(UStaticMesh* Mesh, const FString& Path)
 {
 	// check and get the lod0 resource
@@ -196,7 +287,7 @@ void UAssetExporterBPLibrary::ExportStaticMesh(UStaticMesh* Mesh, const FString&
 	ns_yoyo::FStaticMeshResource yyMeshResource;
 
 	// build resource path
-	yyMeshResource.Path = GetAssetPath(Mesh);
+	yyMeshResource.Path = GetAssetPath<ns_yoyo::EResourceType::StaticMesh>(Mesh);
 
 	// sections
 	for (auto& ueSection : LODResource.Sections)
@@ -237,6 +328,14 @@ void UAssetExporterBPLibrary::ExportAsset(UObject* Asset, const FString& Path)
 	{
 		return ExportSkeletalMesh(Cast<USkeletalMesh>(Asset), Path);
 	}
+	if (Asset->IsA(UAnimSequence::StaticClass()))
+	{
+		return ExportAnimSequence(Cast<UAnimSequence>(Asset), Path);
+	}
+	if (Asset->IsA(USkeleton::StaticClass()))
+	{
+		return ExportSkeleton(Cast<USkeleton>(Asset), Path);
+	}
 }
 
 void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
@@ -247,6 +346,8 @@ void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
 
 	TSet<UStaticMesh*> ExportedStaticMeshes;
 	TSet<USkeletalMesh*> ExportedSkelMeshes;
+	TSet<UAnimSequence*> ExportedAnimSequences;
+	TSet<USkeleton*> ExportedSkeletons;
 
 	ULevel* Level = World->PersistentLevel;
 	for (AActor* Actor : Level->Actors)
@@ -269,7 +370,7 @@ void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
 					// build static mesh scene info
 					ns_yoyo::FStaticMeshSceneInfo yyStaticMeshSceneInfo;
 					yyStaticMeshSceneInfo.ResourcePath = 
-						GetAssetPath(StaticMesh);
+						GetAssetPath<ns_yoyo::EResourceType::StaticMesh>(StaticMesh);
 					yyStaticMeshSceneInfo.Location =
 						Cast<UPrimitiveComponent>(Component)->GetComponentLocation();
 					yyStaticMeshSceneInfo.Rotation =
@@ -292,8 +393,24 @@ void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
 				if (SkelMesh)
 				{
 					ExportedSkelMeshes.Add(SkelMesh);
-					// build static mesh scene info
-
+					// build skeletal mesh scene info
+					ns_yoyo::FSkeletalMeshSceneInfo yySkelMeshSceneInfo;
+					yySkelMeshSceneInfo.ResourcePath = GetAssetPath<ns_yoyo::EResourceType::SkeletalMesh>(SkelMesh);
+					yySkelMeshSceneInfo.Transform.Rot = Component->GetComponentQuat();
+					yySkelMeshSceneInfo.Transform.Trans = Component->GetComponentLocation();
+					yySkelMeshSceneInfo.Transform.Scale = Component->GetComponentScale();
+					yySceneInfo.SkelMeshSceneInfos.Emplace(yySkelMeshSceneInfo);
+				}
+				if (EAnimationMode::AnimationSingleNode == Component->GetAnimationMode())
+				{
+					UAnimSequence* AnimSequence = Cast<UAnimSequence>(Component->AnimationData.AnimToPlay);
+					if (AnimSequence)
+					{
+						ExportedAnimSequences.Add(AnimSequence);
+						USkeleton* Skeleton = AnimSequence->GetSkeleton();
+						check(Skeleton);
+						ExportedSkeletons.Add(Skeleton);
+					}
 				}
 			}
 			continue;
@@ -323,9 +440,21 @@ void UAssetExporterBPLibrary::ExportMap(UWorld* World, const FString& Path)
 		ExportSkeletalMesh(SkelMesh, Path);
 	}
 
+	// export animation sequences
+	for (UAnimSequence* AnimSeq : ExportedAnimSequences)
+	{
+		ExportAnimSequence(AnimSeq, Path);
+	}
+
+	// export skeletons
+	for (USkeleton* Skeleton : ExportedSkeletons)
+	{
+		ExportSkeleton(Skeleton, Path);
+	}
+
 	// write to file
 	ns_yoyo::FLevelResource yyLevelResource;
-	yyLevelResource.Path = GetAssetPath(Level);
+	yyLevelResource.Path = GetAssetPath<ns_yoyo::EResourceType::Level>(Level);
 	yyLevelResource.SceneInfo = yySceneInfo;
 
 #if 1
