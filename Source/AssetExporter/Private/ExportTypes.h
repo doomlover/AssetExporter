@@ -20,7 +20,7 @@ namespace ns_yoyo
 
 	struct KTransform
 	{
-		FQuat Rot; // (x,y,z,w)
+		FQuat Rot; // (x,y,z,w), align(16)
 		FVector Trans;
 		FVector Scale;
 		friend FArchive& operator<<(FArchive& Ar, KTransform& T)
@@ -53,9 +53,8 @@ namespace ns_yoyo
 		{
 			Ar << Skel.Type
 				<< Skel.Path
-				<< Skel.BoneInfos;
-			// typeSize, arrayCount, bulkData
-			Skel.BonePoses.BulkSerialize(Ar);
+				<< Skel.BoneInfos
+				<< Skel.BonePoses;
 			return Ar;
 		}
 	};
@@ -186,9 +185,11 @@ namespace ns_yoyo
 		TArray<FSkinWeightInfo> SkinWeightInfos;
 		friend FArchive& operator<<(FArchive& Ar, FSkinWeightBuffer& Buffer)
 		{
-			// TypeSize and ArrayNum will be serialized first
-			// operator<< for FSkinWeightInfo will not be used
-			Buffer.SkinWeightInfos.BulkSerialize(Ar);
+			uint32 TypeSize = Buffer.SkinWeightInfos.GetTypeSize();
+			uint32 ArrayNum = Buffer.SkinWeightInfos.Num();
+			Ar << TypeSize;
+			Ar << ArrayNum;
+			Ar.Serialize(Buffer.SkinWeightInfos.GetData(), TypeSize * ArrayNum);
 			return Ar;
 		}
 	};
